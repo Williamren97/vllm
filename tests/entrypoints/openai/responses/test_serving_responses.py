@@ -1613,43 +1613,86 @@ class TestHarmonyPreambleStreaming:
         type_names = [e.type for e in events]
         assert "response.output_text.done" not in type_names
 
-    @pytest.mark.xfail(
-        reason=(
-            "TODO: Ensure added/in-progress events are emitted for zero-delta items."
-            "So we can safely emit done events for zero-delta items."
-        ),
-        strict=True,
+    @pytest.mark.parametrize(
+        ("channel", "recipient", "expected_types"),
+        [
+            (
+                "commentary",
+                None,
+                [
+                    "response.output_item.added",
+                    "response.content_part.added",
+                    "response.output_text.done",
+                    "response.content_part.done",
+                    "response.output_item.done",
+                ],
+            ),
+            (
+                "analysis",
+                None,
+                [
+                    "response.output_item.added",
+                    "response.content_part.added",
+                    "response.reasoning_text.done",
+                    "response.content_part.done",
+                    "response.output_item.done",
+                ],
+            ),
+            (
+                "commentary",
+                "functions.get_weather",
+                [
+                    "response.output_item.added",
+                    "response.function_call_arguments.done",
+                    "response.output_item.done",
+                ],
+            ),
+            (
+                "commentary",
+                "python",
+                [
+                    "response.output_item.added",
+                    "response.code_interpreter_call.in_progress",
+                    "response.code_interpreter_call_code.done",
+                    "response.code_interpreter_call.interpreting",
+                    "response.code_interpreter_call.completed",
+                    "response.output_item.done",
+                ],
+            ),
+            (
+                "commentary",
+                "repo_browser.list",
+                [
+                    "response.output_item.added",
+                    "response.mcp_call.in_progress",
+                    "response.mcp_call_arguments.done",
+                    "response.mcp_call.completed",
+                    "response.output_item.done",
+                ],
+            ),
+        ],
     )
     def test_zero_delta_items_should_preserve_streaming_lifecycle(
-        self,
+        self, channel, recipient, expected_types
     ) -> None:
-        """Zero-delta Harmony items should still produce a coherent lifecycle."""
+        """An item that completes without any delta must still be announced
+        with added/in-progress events before its done events, under a fresh
+        id rather than the previous item's."""
         from vllm.entrypoints.openai.responses.streaming_events import (
             emit_previous_item_done_events,
         )
 
-        cases: list[tuple[str, str | None, str]] = [
-            ("commentary", None, "msg_stale"),
-            ("analysis", None, "msg_stale"),
-            ("commentary", "functions.get_weather", "fc_stale"),
-            ("commentary", "python", "tool_stale"),
-            ("commentary", "repo_browser.list", "mcp_stale"),
-        ]
+        previous = self._make_previous_item(channel=channel, recipient=recipient)
+        state = StreamingState()
+        state.current_item_id = "stale_id"
 
-        for channel, recipient, current_item_id in cases:
-            previous = self._make_previous_item(channel=channel, recipient=recipient)
-            state = StreamingState()
-            state.current_item_id = current_item_id
-            state.current_call_id = "call_stale"
-            state.current_content_index = 0
+        events = emit_previous_item_done_events(
+            previous, state, function_tool_names=frozenset({"get_weather"})
+        )
 
-            events = emit_previous_item_done_events(
-                previous, state, function_tool_names=None
-            )
-
-            type_names = [e.type for e in events]
-            assert "response.output_item.added" in type_names
-            assert "response.output_item.done" in type_names
+        assert [e.type for e in events] == expected_types
+        added, done = events[0], events[-1]
+        assert added.item.id == done.item.id != "stale_id"
 
 
 _PER_REQUEST_STATS = RequestStateStats(
@@ -2512,21 +2555,28 @@ async def test_harmony_stream_completed_response_reuses_streamed_ids():
 
 
 @pytest.mark.asyncio
-async def test_harmony_stream_unstreamed_item_keeps_own_id():
-    """An item with no done event (zero-delta) must not take the streamed id
-    of a later item of the same type."""
-    unstreamed = _harmony_msg("analysis", "skipped")
+async def test_harmony_stream_zero_delta_item_is_streamed():
+    """An item that completes without any delta is still streamed as its own
+    output item, and response.completed keeps the streamed ids."""
+    zero_delta = _harmony_msg("analysis", "skipped")
     reasoning = _harmony_msg("analysis", "think")
 
     events = await _harmony_stream_events(
-        [_harmony_segments(unstreamed, streamed=False), _harmony_segments(reasoning)]
+        [_harmony_segments(zero_delta, streamed=False), _harmony_segments(reasoning)]
     )
 
-    (streamed,) = [e.item for e in events if e.type == "response.output_item.done"]
+    item_events = [e for e in events if e.type.startswith("response.output_item.")]
+    assert [(e.type, e.output_index) for e in item_events] == [
+        ("response.output_item.added", 0),
+        ("response.output_item.done", 0),
+        ("response.output_item.added", 1),
+        ("response.output_item.done", 1),
+    ]
     first, second = events[-1].response.output
     assert first.content[0].text == "skipped"
-    assert first.id != streamed.id
-    assert second.id == streamed.id
+    assert [first.id, second.id] == [
+        e.item.id for e in item_events if e.type == "response.output_item.done"
+    ]
 
 
 @pytest.mark.asyncio

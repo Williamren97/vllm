@@ -147,6 +147,42 @@ def is_mcp_tool_by_namespace(
 # =====================================================================
 
 
+def emit_text_added_events(
+    state: StreamingState,
+) -> list[StreamingResponsesResponse]:
+    """Emit events that open a text output message."""
+    state.sent_output_item_added = True
+    state.current_item_id = f"msg_{random_uuid()}"
+    state.current_content_index += 1
+    return [
+        ResponseOutputItemAddedEvent(
+            type="response.output_item.added",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item=ResponseOutputMessage(
+                id=state.current_item_id,
+                type="message",
+                role="assistant",
+                content=[],
+                status="in_progress",
+            ),
+        ),
+        ResponseContentPartAddedEvent(
+            type="response.content_part.added",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item_id=state.current_item_id,
+            content_index=state.current_content_index,
+            part=ResponseOutputText(
+                type="output_text",
+                text="",
+                annotations=[],
+                logprobs=[],
+            ),
+        ),
+    ]
+
+
 def emit_text_delta_events(
     delta: str,
     state: StreamingState,
@@ -154,38 +190,7 @@ def emit_text_delta_events(
     """Emit events for text content delta streaming."""
     events: list[StreamingResponsesResponse] = []
     if not state.sent_output_item_added:
-        state.sent_output_item_added = True
-        state.current_item_id = f"msg_{random_uuid()}"
-        events.append(
-            ResponseOutputItemAddedEvent(
-                type="response.output_item.added",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item=ResponseOutputMessage(
-                    id=state.current_item_id,
-                    type="message",
-                    role="assistant",
-                    content=[],
-                    status="in_progress",
-                ),
-            )
-        )
-        state.current_content_index += 1
-        events.append(
-            ResponseContentPartAddedEvent(
-                type="response.content_part.added",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item_id=state.current_item_id,
-                content_index=state.current_content_index,
-                part=ResponseOutputText(
-                    type="output_text",
-                    text="",
-                    annotations=[],
-                    logprobs=[],
-                ),
-            )
-        )
+        events.extend(emit_text_added_events(state))
     events.append(
         ResponseTextDeltaEvent(
             type="response.output_text.delta",
@@ -201,6 +206,36 @@ def emit_text_delta_events(
     return events
 
 
+def emit_reasoning_added_events(
+    state: StreamingState,
+) -> list[StreamingResponsesResponse]:
+    """Emit events that open a reasoning item."""
+    state.sent_output_item_added = True
+    state.current_item_id = f"rs_{random_uuid()}"
+    state.current_content_index += 1
+    return [
+        ResponseOutputItemAddedEvent(
+            type="response.output_item.added",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item=ResponseReasoningItem(
+                type="reasoning",
+                id=state.current_item_id,
+                summary=[],
+                status="in_progress",
+            ),
+        ),
+        ResponseContentPartAddedEvent(
+            type="response.content_part.added",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item_id=state.current_item_id,
+            content_index=state.current_content_index,
+            part={"text": "", "type": "reasoning_text"},
+        ),
+    ]
+
+
 def emit_reasoning_delta_events(
     delta: str,
     state: StreamingState,
@@ -208,32 +243,7 @@ def emit_reasoning_delta_events(
     """Emit events for reasoning text delta streaming."""
     events: list[StreamingResponsesResponse] = []
     if not state.sent_output_item_added:
-        state.sent_output_item_added = True
-        state.current_item_id = f"rs_{random_uuid()}"
-        events.append(
-            ResponseOutputItemAddedEvent(
-                type="response.output_item.added",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item=ResponseReasoningItem(
-                    type="reasoning",
-                    id=state.current_item_id,
-                    summary=[],
-                    status="in_progress",
-                ),
-            )
-        )
-        state.current_content_index += 1
-        events.append(
-            ResponseContentPartAddedEvent(
-                type="response.content_part.added",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item_id=state.current_item_id,
-                content_index=state.current_content_index,
-                part={"text": "", "type": "reasoning_text"},
-            )
-        )
+        events.extend(emit_reasoning_added_events(state))
     events.append(
         ResponseReasoningTextDeltaEvent(
             type="response.reasoning_text.delta",
@@ -247,6 +257,31 @@ def emit_reasoning_delta_events(
     return events
 
 
+def emit_function_call_added_events(
+    function_name: str,
+    state: StreamingState,
+) -> list[StreamingResponsesResponse]:
+    """Emit events that open a function call item."""
+    state.is_first_function_call_delta = True
+    state.current_item_id = f"fc_{random_uuid()}"
+    state.current_call_id = f"call_{random_uuid()}"
+    return [
+        ResponseOutputItemAddedEvent(
+            type="response.output_item.added",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item=ResponseFunctionToolCall(
+                name=function_name,
+                type="function_call",
+                id=state.current_item_id,
+                call_id=state.current_call_id,
+                arguments="",
+                status="in_progress",
+            ),
+        )
+    ]
+
+
 def emit_function_call_delta_events(
     delta: str,
     function_name: str,
@@ -255,25 +290,7 @@ def emit_function_call_delta_events(
     """Emit events for function call argument deltas."""
     events: list[StreamingResponsesResponse] = []
     if state.is_first_function_call_delta is False:
-        state.is_first_function_call_delta = True
-        state.current_item_id = f"fc_{random_uuid()}"
-        state.current_call_id = f"call_{random_uuid()}"
-        tool_call_item = ResponseFunctionToolCall(
-            name=function_name,
-            type="function_call",
-            id=state.current_item_id,
-            call_id=state.current_call_id,
-            arguments="",
-            status="in_progress",
-        )
-        events.append(
-            ResponseOutputItemAddedEvent(
-                type="response.output_item.added",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item=tool_call_item,
-            )
-        )
+        events.extend(emit_function_call_added_events(function_name, state))
     # Always emit the delta (including on first call)
     events.append(
         ResponseFunctionCallArgumentsDeltaEvent(
@@ -287,40 +304,46 @@ def emit_function_call_delta_events(
     return events
 
 
+def emit_mcp_added_events(
+    state: StreamingState,
+    recipient: str,
+) -> list[StreamingResponsesResponse]:
+    """Emit events that open an MCP tool call item."""
+    name, server_label = _resolve_mcp_name_label(recipient)
+    state.sent_output_item_added = True
+    state.current_item_id = f"mcp_{random_uuid()}"
+    return [
+        ResponseOutputItemAddedEvent(
+            type="response.output_item.added",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item=McpCall(
+                type="mcp_call",
+                id=state.current_item_id,
+                name=name,
+                arguments="",
+                server_label=server_label,
+                status="in_progress",
+            ),
+        ),
+        ResponseMcpCallInProgressEvent(
+            type="response.mcp_call.in_progress",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item_id=state.current_item_id,
+        ),
+    ]
+
+
 def emit_mcp_delta_events(
     delta: str,
     state: StreamingState,
     recipient: str,
 ) -> list[StreamingResponsesResponse]:
     """Emit events for MCP tool delta streaming."""
-    name, server_label = _resolve_mcp_name_label(recipient)
     events: list[StreamingResponsesResponse] = []
     if not state.sent_output_item_added:
-        state.sent_output_item_added = True
-        state.current_item_id = f"mcp_{random_uuid()}"
-        events.append(
-            ResponseOutputItemAddedEvent(
-                type="response.output_item.added",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item=McpCall(
-                    type="mcp_call",
-                    id=state.current_item_id,
-                    name=name,
-                    arguments="",
-                    server_label=server_label,
-                    status="in_progress",
-                ),
-            )
-        )
-        events.append(
-            ResponseMcpCallInProgressEvent(
-                type="response.mcp_call.in_progress",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item_id=state.current_item_id,
-            )
-        )
+        events.extend(emit_mcp_added_events(state, recipient))
     events.append(
         ResponseMcpCallArgumentsDeltaEvent(
             type="response.mcp_call_arguments.delta",
@@ -333,6 +356,35 @@ def emit_mcp_delta_events(
     return events
 
 
+def emit_code_interpreter_added_events(
+    state: StreamingState,
+) -> list[StreamingResponsesResponse]:
+    """Emit events that open a code interpreter call item."""
+    state.sent_output_item_added = True
+    state.current_item_id = f"tool_{random_uuid()}"
+    return [
+        ResponseOutputItemAddedEvent(
+            type="response.output_item.added",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item=ResponseCodeInterpreterToolCallParam(
+                type="code_interpreter_call",
+                id=state.current_item_id,
+                code=None,
+                container_id="auto",
+                outputs=None,
+                status="in_progress",
+            ),
+        ),
+        ResponseCodeInterpreterCallInProgressEvent(
+            type="response.code_interpreter_call.in_progress",
+            sequence_number=-1,
+            output_index=state.current_output_index,
+            item_id=state.current_item_id,
+        ),
+    ]
+
+
 def emit_code_interpreter_delta_events(
     delta: str,
     state: StreamingState,
@@ -340,31 +392,7 @@ def emit_code_interpreter_delta_events(
     """Emit events for code interpreter delta streaming."""
     events: list[StreamingResponsesResponse] = []
     if not state.sent_output_item_added:
-        state.sent_output_item_added = True
-        state.current_item_id = f"tool_{random_uuid()}"
-        events.append(
-            ResponseOutputItemAddedEvent(
-                type="response.output_item.added",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item=ResponseCodeInterpreterToolCallParam(
-                    type="code_interpreter_call",
-                    id=state.current_item_id,
-                    code=None,
-                    container_id="auto",
-                    outputs=None,
-                    status="in_progress",
-                ),
-            )
-        )
-        events.append(
-            ResponseCodeInterpreterCallInProgressEvent(
-                type="response.code_interpreter_call.in_progress",
-                sequence_number=-1,
-                output_index=state.current_output_index,
-                item_id=state.current_item_id,
-            )
-        )
+        events.extend(emit_code_interpreter_added_events(state))
     events.append(
         ResponseCodeInterpreterCallCodeDeltaEvent(
             type="response.code_interpreter_call_code.delta",
@@ -604,6 +632,28 @@ def emit_content_delta_events(
     return []
 
 
+def emit_previous_item_added_events(
+    previous_item: HarmonyMessage,
+    state: StreamingState,
+    function_tool_names: frozenset[str] | None = None,
+) -> list[StreamingResponsesResponse]:
+    """Emit the opening events for an item that completed without any delta."""
+    recipient = previous_item.recipient
+    if recipient is not None:
+        if is_function_recipient(recipient, function_tool_names):
+            function_name = extract_function_from_recipient(recipient)
+            return emit_function_call_added_events(function_name, state)
+        elif recipient == "python":
+            return emit_code_interpreter_added_events(state)
+        elif is_mcp_tool_by_namespace(recipient, function_tool_names):
+            return emit_mcp_added_events(state, recipient)
+    elif previous_item.channel == "analysis":
+        return emit_reasoning_added_events(state)
+    elif previous_item.channel in ("commentary", "final"):
+        return emit_text_added_events(state)
+    return []
+
+
 def emit_previous_item_done_events(
     previous_item: HarmonyMessage,
     state: StreamingState,
@@ -611,15 +661,25 @@ def emit_previous_item_done_events(
 ) -> list[StreamingResponsesResponse]:
     """Emit done events for the previous item when expecting a new start.
 
+    An item that streamed no delta has not been announced yet, so its
+    added/in-progress events are emitted first.
+
     This is a Harmony-specific dispatcher that extracts values from the
     Harmony parser's message object and delegates to shared leaf helpers.
     """
+    events: list[StreamingResponsesResponse] = []
     if not state.sent_output_item_added and not state.is_first_function_call_delta:
-        # Suppress done events for items had no delta and thus had no
-        # added/in-progress lifecycle events. This is a bug.
-        # TODO: Ensure added/in-progress events are emitted for zero-delta items.
-        return []
+        events = emit_previous_item_added_events(
+            previous_item, state, function_tool_names
+        )
+    return events + _emit_item_done_events(previous_item, state, function_tool_names)
 
+
+def _emit_item_done_events(
+    previous_item: HarmonyMessage,
+    state: StreamingState,
+    function_tool_names: frozenset[str] | None,
+) -> list[StreamingResponsesResponse]:
     text = previous_item.content[0].text
     if previous_item.recipient is not None:
         # Deal with tool call
